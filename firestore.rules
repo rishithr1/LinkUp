@@ -1,0 +1,61 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isIndustry() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'industry';
+    }
+    
+    function isStartup() {
+      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'startup';
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId);
+    }
+
+    // Challenges Collection
+    match /challenges/{challengeId} {
+      allow read: if isAuthenticated();
+      allow create: if isIndustry() && request.resource.data.industryId == request.auth.uid;
+      allow update: if isIndustry() && resource.data.industryId == request.auth.uid;
+      // Prevent deleting for now, or allow owner
+      allow delete: if isIndustry() && resource.data.industryId == request.auth.uid;
+    }
+
+    // Proposals Collection
+    match /proposals/{proposalId} {
+      // Industry can read proposals for their challenges
+      // Startup can read their own proposals
+      allow read: if isAuthenticated() && (
+        resource.data.startupId == request.auth.uid || 
+        get(/databases/$(database)/documents/challenges/$(resource.data.challengeId)).data.industryId == request.auth.uid
+      );
+      
+      // Only Startups can create proposals
+      allow create: if isStartup() && request.resource.data.startupId == request.auth.uid;
+      
+      // Industry can ONLY update status
+      allow update: if isAuthenticated() && (
+        // Industry accepting/rejecting
+        (
+           get(/databases/$(database)/documents/challenges/$(resource.data.challengeId)).data.industryId == request.auth.uid &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        )
+      );
+    }
+  }
+}
